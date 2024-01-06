@@ -1,0 +1,14 @@
+* justbe
+
+** summary
+
+This is a description of project justbe.
+
+** usage
+
+Example:
+#+begin_example
+make test
+./justbe --help
+./justbe --verbose --verbose # for debug
+#+end_example
