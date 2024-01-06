@@ -3,6 +3,7 @@ package justbe
 import (
 	"bufio"
 	"fmt"
+	"html/template"
 	"log/slog"
 	"os"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/jessevdk/go-flags"
+
 	mymazda "github.com/taylormonacelli/forestfish/mymazda"
 )
 
@@ -19,6 +21,14 @@ var opts struct {
 	Verbose   []bool `short:"v" long:"verbose" description:"Show verbose debug information, each -v bumps log level"`
 	logLevel  slog.Level
 	Paths     []string `short:"p" long:"path" description:"File paths to be processed" required:"true"`
+}
+
+func formatNumWithCommas(num int) string {
+	return humanize.Comma(int64(num))
+}
+
+var funcMap = template.FuncMap{
+	"formatNumWithCommas": formatNumWithCommas,
 }
 
 func Execute() int {
@@ -49,7 +59,7 @@ func parseFlags() error {
 }
 
 func run(paths []string) error {
-	expandedPaths, err := tildeExpandPaths(paths...)
+	expandedPaths, err := getAbsPath(paths...)
 	if err != nil {
 		return fmt.Errorf("error expanding paths: %v", err)
 	}
@@ -63,18 +73,23 @@ func run(paths []string) error {
 		}
 		defer file.Close()
 
-		if err := processFile(file, path, &matches); err != nil {
+		if err := processFile(path, &matches); err != nil {
 			return fmt.Errorf("error processing file %s: %v", path, err)
 		}
 	}
 
 	printMatches(matches)
-	printStats(matches)
+	printStats(matches, expandedPaths)
 
 	return nil
 }
 
-func processFile(file *os.File, path string, matches *[]MatchedLine) error {
+func processFile(path string, matches *[]MatchedLine) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("error opening file %s: %v", path, err)
+	}
+
 	scanner := bufio.NewScanner(file)
 	lineNumber := 0
 
@@ -109,8 +124,21 @@ func printMatches(matches []MatchedLine) {
 	copy(sortedMatches, matches)
 	sortMatchesByName(sortedMatches)
 
-	for index, match := range sortedMatches {
-		fmt.Printf("%s %s %s:%d\n", humanize.Comma(int64(index)), match.Name, match.FilePath, match.LineNumber)
+	matchesTemplate := `
+{{range $index, $match := .}}
+{{printf "%5s. %s %s:%d" (formatNumWithCommas $index) $match.Name $match.FilePath $match.LineNumber}}{{end}}
+`
+
+	tmpl, err := template.New("matches").Funcs(funcMap).Parse(matchesTemplate)
+	if err != nil {
+		slog.Error("error creating template: %v", err)
+		return
+	}
+
+	err = tmpl.Execute(os.Stdout, sortedMatches)
+	if err != nil {
+		slog.Error("error executing template: %v", err)
+		return
 	}
 }
 
@@ -120,7 +148,24 @@ func sortMatchesByName(matches []MatchedLine) {
 	})
 }
 
-func printStats(matches []MatchedLine) {
+func countLinesInFile(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		slog.Warn("error opening file %s: %v", path, err)
+		return 0, fmt.Errorf("error opening file %s: %v", path, err)
+	}
+	defer file.Close()
+
+	lineCount, err := countLines(file)
+	if err != nil {
+		slog.Warn("error counting lines in file %s: %v", path, err)
+		return 0, fmt.Errorf("error counting lines in file %s: %v", path, err)
+	}
+
+	return lineCount, nil
+}
+
+func printStats(matches []MatchedLine, paths []string) {
 	fileLineCounts := make(map[string]int)
 	fileMatchedLineCounts := make(map[string]int)
 	totalLineCount := 0
@@ -133,17 +178,9 @@ func printStats(matches []MatchedLine) {
 		totalMatchedLineCount++
 	}
 
-	for _, path := range opts.Paths {
-		file, err := os.Open(path)
+	for _, path := range paths {
+		lineCount, err := countLinesInFile(path)
 		if err != nil {
-			slog.Warn("error opening file %s: %v", path, err)
-			continue
-		}
-		defer file.Close()
-
-		lineCount, err := countLines(file)
-		if err != nil {
-			slog.Warn("error counting lines in file %s: %v", path, err)
 			continue
 		}
 
@@ -151,19 +188,38 @@ func printStats(matches []MatchedLine) {
 		totalLineCount += lineCount
 	}
 
-	fmt.Println("\nFile Line Counts:")
-	for path, count := range fileLineCounts {
-		fmt.Printf("%s: %s\n", path, humanize.Comma(int64(count)))
+	statsData := struct {
+		FileLineCounts        map[string]int
+		TotalLineCount        int
+		FileMatchedLineCounts map[string]int
+		TotalMatchedLineCount int
+	}{
+		FileLineCounts:        fileLineCounts,
+		TotalLineCount:        totalLineCount,
+		FileMatchedLineCounts: fileMatchedLineCounts,
+		TotalMatchedLineCount: totalMatchedLineCount,
 	}
 
-	fmt.Printf("\nTotal Line Count: %s\n", humanize.Comma(int64(totalLineCount)))
+	statsTemplate := `
+File Line Counts:
+{{range $path, $count := .FileLineCounts}}{{printf "%10s: %s\n"  (formatNumWithCommas $count) $path}}{{end}}
+{{printf "%10s" (formatNumWithCommas .TotalLineCount)}}: Total Line Count
+{{range $path, $count := .FileMatchedLineCounts}}{{printf "%10s: %s: File Matched Line Counts"  (formatNumWithCommas $count) $path}}
+{{end}}
+{{ printf "%10s" (formatNumWithCommas .TotalMatchedLineCount)}}: Total Matched Line Count
+`
 
-	fmt.Println("\nFile Matched Line Counts:")
-	for path, count := range fileMatchedLineCounts {
-		fmt.Printf("%s: %s\n", path, humanize.Comma(int64(count)))
+	tmpl, err := template.New("stats").Funcs(funcMap).Parse(statsTemplate)
+	if err != nil {
+		slog.Error("error creating template: %v", err)
+		return
 	}
 
-	fmt.Printf("\nTotal Matched Line Count: %s\n", humanize.Comma(int64(totalMatchedLineCount)))
+	err = tmpl.Execute(os.Stdout, statsData)
+	if err != nil {
+		slog.Error("error executing template: %v", err)
+		return
+	}
 }
 
 func countLines(file *os.File) (int, error) {
@@ -181,7 +237,7 @@ func countLines(file *os.File) (int, error) {
 	return lineCount, nil
 }
 
-func tildeExpandPaths(paths ...string) ([]string, error) {
+func getAbsPath(paths ...string) ([]string, error) {
 	var expandedPaths []string
 
 	for _, path := range paths {
