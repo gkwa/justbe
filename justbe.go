@@ -28,6 +28,13 @@ var opts struct {
 	ReportNameCounts bool `short:"n" long:"report-name-counts" description:"Generate report for name counts"`
 }
 
+type MatchedLine struct {
+	FilePath    string
+	LineNumber  int
+	Name        string
+	IndentLevel int
+}
+
 func formatNumWithCommas(num int) string {
 	return humanize.Comma(int64(num))
 }
@@ -299,20 +306,13 @@ func getAbsPath(paths ...string) ([]string, error) {
 	return expandedPaths, nil
 }
 
-type MatchedLine struct {
-	FilePath    string
-	LineNumber  int
-	Name        string
-	IndentLevel int
-}
-
-type NameInfo struct {
-	Name   string
-	Count  int
-	Places []string
-}
-
 func genReportNameCounts(matches []MatchedLine) (string, error) {
+	type NameInfo struct {
+		Name   string
+		Count  int
+		Places []string
+	}
+
 	nameCount := make(map[string]NameInfo)
 
 	for _, match := range matches {
