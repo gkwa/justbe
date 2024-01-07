@@ -65,7 +65,7 @@ func run(paths []string) error {
 		return fmt.Errorf("error expanding paths: %v", err)
 	}
 
-	err = assertTextFiles(expandedPaths)
+	err = CanProcessFiles(expandedPaths...)
 	if err != nil {
 		return fmt.Errorf("error asserting text files: %v", err)
 	}
@@ -79,13 +79,28 @@ func run(paths []string) error {
 		}
 	}
 
-	printMatches(matches)
-	printStats(matches, expandedPaths)
+	reportMatches, err := genReportMatches(matches)
+	if err != nil {
+		return fmt.Errorf("error printing matches: %v", err)
+	}
+	fmt.Println(reportMatches)
+
+	reportNameCounts, err := genReportNameCounts(matches)
+	if err != nil {
+		return fmt.Errorf("error printing name counts: %v", err)
+	}
+	fmt.Println(reportNameCounts)
+
+	reportStats, err := genReportStats(matches, expandedPaths)
+	if err != nil {
+		return fmt.Errorf("error printing stats: %v", err)
+	}
+	fmt.Println(reportStats)
 
 	return nil
 }
 
-func assertTextFiles(paths []string) error {
+func CanProcessFiles(paths ...string) error {
 	for _, path := range paths {
 		mimetype, err := mimetype.DetectFile(path)
 		if err != nil {
@@ -135,7 +150,7 @@ func processFile(path string, matches *[]MatchedLine) error {
 	return nil
 }
 
-func printMatches(matches []MatchedLine) {
+func genReportMatches(matches []MatchedLine) (string, error) {
 	sortedMatches := make([]MatchedLine, len(matches))
 	copy(sortedMatches, matches)
 	sortMatchesByName(sortedMatches)
@@ -147,15 +162,16 @@ func printMatches(matches []MatchedLine) {
 
 	tmpl, err := template.New("matches").Funcs(funcMap).Parse(matchesTemplate)
 	if err != nil {
-		slog.Error("error creating template: %v", err)
-		return
+		return "", fmt.Errorf("error creating template: %v", err)
 	}
 
-	err = tmpl.Execute(os.Stdout, sortedMatches)
+	var b strings.Builder
+	err = tmpl.Execute(&b, sortedMatches)
 	if err != nil {
-		slog.Error("error executing template: %v", err)
-		return
+		return "", fmt.Errorf("error executing template: %v", err)
 	}
+
+	return b.String(), nil
 }
 
 func sortMatchesByName(matches []MatchedLine) {
@@ -181,7 +197,7 @@ func countLinesInFile(path string) (int, error) {
 	return lineCount, nil
 }
 
-func printStats(matches []MatchedLine, paths []string) {
+func genReportStats(matches []MatchedLine, paths []string) (string, error) {
 	fileLineCounts := make(map[string]int)
 	fileMatchedLineCounts := make(map[string]int)
 	totalLineCount := 0
@@ -227,15 +243,16 @@ File Line Counts:
 
 	tmpl, err := template.New("stats").Funcs(funcMap).Parse(statsTemplate)
 	if err != nil {
-		slog.Error("error creating template: %v", err)
-		return
+		return "", fmt.Errorf("error creating template: %v", err)
 	}
 
-	err = tmpl.Execute(os.Stdout, statsData)
+	var b strings.Builder
+	err = tmpl.Execute(&b, statsData)
 	if err != nil {
-		slog.Error("error executing template: %v", err)
-		return
+		return "", fmt.Errorf("error executing template: %v", err)
 	}
+
+	return b.String(), nil
 }
 
 func countLines(path string) (int, error) {
@@ -277,4 +294,79 @@ type MatchedLine struct {
 	LineNumber  int
 	Name        string
 	IndentLevel int
+}
+
+type NameInfo struct {
+	Name   string
+	Count  int
+	Places []string
+}
+
+func genReportNameCounts(matches []MatchedLine) (string, error) {
+	nameCount := make(map[string]NameInfo)
+
+	for _, match := range matches {
+		lowerName := strings.ToLower(match.Name)
+		info, found := nameCount[lowerName]
+		if !found {
+			info = NameInfo{Name: match.Name}
+		}
+
+		info.Count++
+		info.Places = append(info.Places, fmt.Sprintf("%s:%d", match.FilePath, match.LineNumber))
+
+		nameCount[lowerName] = info
+	}
+
+	names := make([]NameInfo, 0, len(nameCount))
+	for _, info := range nameCount {
+		names = append(names, info)
+	}
+
+	sort.Slice(names, func(i, j int) bool {
+		return names[i].Count > names[j].Count
+	})
+
+	filteredNames := make([]NameInfo, 0)
+
+	for _, info := range names {
+		if info.Count >= 2 {
+			filteredNames = append(filteredNames, info)
+		}
+	}
+
+	sort.Slice(filteredNames, func(i, j int) bool {
+		return filteredNames[i].Count > filteredNames[j].Count
+	})
+
+	const namesTemplate = `
+Name duplicates (>= 2), total: {{ formatNumWithCommas .TotalDuplicates }}
+{{- range .Names }}
+{{ .Name }}: {{ .Count }}
+{{ range .Places -}}
+    {{ . }}
+{{ end -}}
+{{ end -}}
+`
+
+	tmpl, err := template.New("names").Funcs(funcMap).Parse(namesTemplate)
+	if err != nil {
+		return "", fmt.Errorf("error creating template: %v", err)
+	}
+
+	namesData := struct {
+		Names           []NameInfo
+		TotalDuplicates int
+	}{
+		Names:           filteredNames,
+		TotalDuplicates: len(filteredNames),
+	}
+
+	var b strings.Builder
+	err = tmpl.Execute(&b, namesData)
+	if err != nil {
+		return "", fmt.Errorf("error executing template: %v", err)
+	}
+
+	return b.String(), nil
 }
