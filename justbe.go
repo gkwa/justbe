@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/dustin/go-humanize"
+	"github.com/gabriel-vasile/mimetype"
 	"github.com/jessevdk/go-flags"
 
 	mymazda "github.com/taylormonacelli/forestfish/mymazda"
@@ -64,15 +65,15 @@ func run(paths []string) error {
 		return fmt.Errorf("error expanding paths: %v", err)
 	}
 
+	err = assertTextFiles(expandedPaths)
+	if err != nil {
+		return fmt.Errorf("error asserting text files: %v", err)
+	}
+
 	var matches []MatchedLine
 
+	// build matches from paths
 	for _, path := range expandedPaths {
-		file, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("error opening file %s: %v", path, err)
-		}
-		defer file.Close()
-
 		if err := processFile(path, &matches); err != nil {
 			return fmt.Errorf("error processing file %s: %v", path, err)
 		}
@@ -80,6 +81,21 @@ func run(paths []string) error {
 
 	printMatches(matches)
 	printStats(matches, expandedPaths)
+
+	return nil
+}
+
+func assertTextFiles(paths []string) error {
+	for _, path := range paths {
+		mimetype, err := mimetype.DetectFile(path)
+		if err != nil {
+			return fmt.Errorf("error detecting mimetype of file %s: %v", path, err)
+		}
+
+		if mimetype.String() != "text/plain; charset=utf-8" {
+			return fmt.Errorf("file %s is not a text file", path)
+		}
+	}
 
 	return nil
 }
@@ -156,7 +172,7 @@ func countLinesInFile(path string) (int, error) {
 	}
 	defer file.Close()
 
-	lineCount, err := countLines(file)
+	lineCount, err := countLines(path)
 	if err != nil {
 		slog.Warn("error counting lines in file %s: %v", path, err)
 		return 0, fmt.Errorf("error counting lines in file %s: %v", path, err)
@@ -222,7 +238,12 @@ File Line Counts:
 	}
 }
 
-func countLines(file *os.File) (int, error) {
+func countLines(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, fmt.Errorf("error opening file %s: %v", path, err)
+	}
+
 	scanner := bufio.NewScanner(file)
 	lineCount := 0
 
