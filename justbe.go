@@ -22,6 +22,10 @@ var opts struct {
 	Verbose   []bool `short:"v" long:"verbose" description:"Show verbose debug information, each -v bumps log level"`
 	logLevel  slog.Level
 	Paths     []string `short:"p" long:"path" description:"File paths to be processed" required:"true"`
+
+	ReportMatches    bool `short:"m" long:"report-matches" description:"Generate report for matched lines"`
+	ReportStats      bool `short:"s" long:"report-stats" description:"Generate statistics report"`
+	ReportNameCounts bool `short:"n" long:"report-name-counts" description:"Generate report for name counts"`
 }
 
 func formatNumWithCommas(num int) string {
@@ -79,23 +83,29 @@ func run(paths []string) error {
 		}
 	}
 
-	reportMatches, err := genReportMatches(matches)
-	if err != nil {
-		return fmt.Errorf("error printing matches: %v", err)
+	if opts.ReportMatches {
+		reportMatches, err := genReportMatches(matches)
+		if err != nil {
+			return fmt.Errorf("error printing matches: %v", err)
+		}
+		fmt.Println(reportMatches)
 	}
-	fmt.Println(reportMatches)
 
-	reportNameCounts, err := genReportNameCounts(matches)
-	if err != nil {
-		return fmt.Errorf("error printing name counts: %v", err)
+	if opts.ReportNameCounts {
+		reportNameCounts, err := genReportNameCounts(matches)
+		if err != nil {
+			return fmt.Errorf("error printing name counts: %v", err)
+		}
+		fmt.Println(reportNameCounts)
 	}
-	fmt.Println(reportNameCounts)
 
-	reportStats, err := genReportStats(matches, expandedPaths)
-	if err != nil {
-		return fmt.Errorf("error printing stats: %v", err)
+	if opts.ReportStats {
+		reportStats, err := genReportStats(matches, expandedPaths)
+		if err != nil {
+			return fmt.Errorf("error printing stats: %v", err)
+		}
+		fmt.Println(reportStats)
 	}
-	fmt.Println(reportStats)
 
 	return nil
 }
